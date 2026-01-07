@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root{
+  --bg:#0a0b10;
+  --panel:#0f1118;
+  --panel2:#141827;
+  --text:#f4f6fb;
+  --muted:#9aa3b2;
+  --border:rgba(255,255,255,.10);
+  --accent:#4f86ff;
+}
+[data-theme="light"]{
+  --bg:#f7f8fb;
+  --panel:#ffffff;
+  --panel2:#f1f3f8;
+  --text:#0b0c0f;
+  --muted:#596273;
+  --border:rgba(0,0,0,.10);
+  --accent:#2f6bff;
+}
+
+html,body,#root{height:100%}
+body{background:var(--bg);color:var(--text);}
+
+.ui-panel{background:var(--panel)}
+.ui-panel2{background:var(--panel2)}
+.ui-border{border:1px solid var(--border)}
+.ui-muted{color:var(--muted)}
+.ui-btn{background:var(--panel2);border:1px solid var(--border)}
+.ui-btn:hover{opacity:.96}
+.ui-btn:active{transform:scale(.98)}
+
+.shimmer{position:relative; overflow:hidden; background:rgba(255,255,255,.05)}
+.shimmer::after{
+  content:""; position:absolute; inset:0; transform:translateX(-120%);
+  background:linear-gradient(90deg, transparent, rgba(255,255,255,.12), transparent);
+  animation:shimmer 1.2s infinite;
+}
+@keyframes shimmer {100%{transform:translateX(120%)}}
