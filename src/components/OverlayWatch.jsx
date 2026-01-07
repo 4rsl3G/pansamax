@@ -6,34 +6,43 @@ import QualitySheet from "./QualitySheet"
 
 function clamp(n, a, b) { return Math.max(a, Math.min(b, n)) }
 
-function Spinner() { return <div className="pansa-spin" /> }
-function ShimmerBar() { return <div className="pansa-shimmer h-2 w-full rounded-full overflow-hidden" /> }
+function Spinner() {
+  return <div className="pansa-spin" />
+}
 
 function LoadingOverlay({ show, title, subtitle }) {
   return (
     <AnimatePresence>
       {show && (
         <motion.div
-          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-          className="absolute inset-0 z-25 grid place-items-center pointer-events-none"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="absolute inset-0 z-40 grid place-items-center"
         >
-          <div className="absolute inset-0 bg-black/55 backdrop-blur-sm" />
-          <div className="relative w-[min(520px,92vw)] p-5 rounded-2xl ui-panel ui-border">
+          {/* dark film */}
+          <div className="absolute inset-0 bg-black/55 backdrop-blur-[2px]" />
+          <div className="relative w-[min(520px,92vw)] rounded-2xl ui-panel ui-border p-5">
             <div className="flex items-center gap-3">
               <Spinner />
               <div className="min-w-0">
-                <div className="font-extrabold text-white truncate">{title}</div>
+                <div className="font-extrabold text-white truncate">{title || "PANSA"}</div>
                 <div className="text-xs ui-muted mt-0.5">{subtitle}</div>
               </div>
             </div>
+
             <div className="mt-4 space-y-3">
-              <ShimmerBar />
-              <ShimmerBar />
-              <div className="grid grid-cols-3 gap-3 mt-1">
+              <div className="pansa-shimmer h-2 w-full rounded-full overflow-hidden" />
+              <div className="pansa-shimmer h-2 w-[86%] rounded-full overflow-hidden" />
+              <div className="grid grid-cols-3 gap-3">
                 <div className="pansa-skeleton h-14 rounded-xl" />
                 <div className="pansa-skeleton h-14 rounded-xl" />
                 <div className="pansa-skeleton h-14 rounded-xl" />
               </div>
+            </div>
+
+            <div className="mt-4 text-[11px] ui-muted">
+              Tip: Double tap to like • Hold to 2× • Swipe up next
             </div>
           </div>
         </motion.div>
@@ -51,7 +60,7 @@ function CenterIndicator({ show, mode }) {
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.85 }}
           transition={{ duration: 0.18 }}
-          className="absolute inset-0 z-30 grid place-items-center pointer-events-none"
+          className="absolute inset-0 z-50 grid place-items-center pointer-events-none"
         >
           <div className="pansa-center-indicator">
             <i className={`ri-${mode === "pause" ? "pause" : "play"}-fill text-[44px]`} />
@@ -82,9 +91,8 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
   const [isReady, setIsReady] = useState(false)
   const [isBuffering, setIsBuffering] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
-  const [loadPhase, setLoadPhase] = useState("Loading…")
   const [centerIcon, setCenterIcon] = useState(null) // "play" | "pause"
-  const [hint, setHint] = useState(null) // "2×"
+  const [hint, setHint] = useState(null)
 
   const [currentIndex, setCurrentIndex] = useState(0)
   const [total, setTotal] = useState(video?.episodes || 1)
@@ -111,7 +119,6 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
   const scheduleHideHud = (ms = 2200) => {
     if (hideHudTimer.current) clearTimeout(hideHudTimer.current)
     hideHudTimer.current = setTimeout(() => {
-      // saat pause, HUD jangan di-hide
       if (!isPlaying) return
       setHudVisible(false)
     }, ms)
@@ -147,7 +154,6 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
     setIsReady(false)
     setIsBuffering(false)
     setIsPlaying(false)
-    setLoadPhase("Loading…")
     setCenterIcon(null)
     setHint(null)
 
@@ -163,6 +169,7 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
     const load = async (e) => {
       if (videoByEp[e]) return
       const r = await api.play(video.code, lang, e)
+      // r = { data: { video: {...}, total, name, ... } }
       setTitleName(r.data.name)
       setTotal(r.data.total)
       setVideoByEp((m) => ({ ...m, [e]: r.data.video }))
@@ -220,33 +227,29 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
     if (!el) return
 
     const onWaiting = () => { setIsBuffering(true); showHudTemporarily(1200) }
-    const onPlaying = () => { setIsBuffering(false); setIsPlaying(true); showHudTemporarily(1800) }
-    const onPause = () => { setIsPlaying(false); setHudVisible(true) } // pause => HUD selalu tampil
+    const onPlaying = () => { setIsBuffering(false); setIsPlaying(true); setIsReady(true); showHudTemporarily(1800) }
+    const onPause = () => { setIsPlaying(false); setHudVisible(true) }
     const onCanPlay = () => { setIsReady(true); setIsBuffering(false) }
-    const onLoadedMetadata = () => setLoadPhase("Decrypting & preparing…")
 
     el.addEventListener("waiting", onWaiting)
     el.addEventListener("playing", onPlaying)
     el.addEventListener("pause", onPause)
     el.addEventListener("canplay", onCanPlay)
-    el.addEventListener("loadedmetadata", onLoadedMetadata)
 
     return () => {
       el.removeEventListener("waiting", onWaiting)
       el.removeEventListener("playing", onPlaying)
       el.removeEventListener("pause", onPause)
       el.removeEventListener("canplay", onCanPlay)
-      el.removeEventListener("loadedmetadata", onLoadedMetadata)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, currentIndex, src])
 
-  // episode/quality change => show loader + HUD
+  // episode/quality change => show overlay loader again
   useEffect(() => {
     if (!open) return
     setIsReady(false)
     setIsBuffering(false)
-    setLoadPhase("Loading…")
     setHudVisible(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, currentIndex, quality, src])
@@ -271,7 +274,8 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
     el.playbackRate = rate
   }
 
-  // Tap handlers
+  // Single tap = pause/play (debounce)
+  // Double tap = like
   const onTapUp = (e) => {
     if (holding.current) return
 
@@ -279,10 +283,8 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
     const dt = now - lastTapAt.current
     lastTapAt.current = now
 
-    // any interaction => show HUD
     showHudTemporarily(2400)
 
-    // double tap => like
     if (dt < 280) {
       if (singleTapTimer.current) {
         clearTimeout(singleTapTimer.current)
@@ -299,14 +301,13 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
       return
     }
 
-    // single tap => pause/play (delayed)
     singleTapTimer.current = setTimeout(() => {
       togglePausePlay()
       singleTapTimer.current = null
     }, 280)
   }
 
-  // Hold 2x
+  // Press & hold = 2x
   const onHoldStart = () => {
     if (holdTimer.current) clearTimeout(holdTimer.current)
     holding.current = false
@@ -330,16 +331,15 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
     }
   }
 
-  // Pointer move / touch move => show HUD (tanpa klik)
-  const onAnyMove = () => {
-    if (!open) return
-    showHudTemporarily(2000)
-  }
+  const onAnyMove = () => showHudTemporarily(2000)
 
   if (!open || !video) return null
 
-  const showLoading = !src || !isReady
-  const showBuffer = isBuffering && isReady
+  // ✅ Loading state:
+  // - fetching link: src empty
+  // - preparing/buffering: src exists but not ready OR waiting
+  const showOverlayLoading = !src || !isReady || isBuffering
+  const loadingText = !src ? "Fetching episode link…" : (isBuffering ? "Buffering…" : "Preparing video…")
 
   return (
     <div className="fixed inset-0 z-[95] bg-black">
@@ -350,70 +350,60 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
         onTouchMove={onAnyMove}
       >
         {eps.map((n, idx) => {
-          const s = idx === currentIndex ? src : "" // only active attaches HLS
+          const isActive = idx === currentIndex
+          const s = isActive ? src : "" // only active attaches HLS
 
           return (
             <div
               key={n}
               data-slide="1"
               data-index={idx}
-              className="relative h-dvh snap-start bg-black select-none"
-              onPointerDown={idx === currentIndex ? onHoldStart : undefined}
-              onPointerUp={idx === currentIndex ? (e) => { onHoldEnd(); onTapUp(e) } : undefined}
-              onPointerCancel={idx === currentIndex ? onHoldEnd : undefined}
+              className="relative h-dvh snap-start bg-black select-none overflow-hidden"
+              onPointerDown={isActive ? onHoldStart : undefined}
+              onPointerUp={isActive ? (e) => { onHoldEnd(); onTapUp(e) } : undefined}
+              onPointerCancel={isActive ? onHoldEnd : undefined}
             >
-              {idx !== currentIndex && (
-                <img
-                  src={video.cover}
-                  alt=""
-                  className="absolute inset-0 h-full w-full object-cover opacity-60"
-                  loading="lazy"
-                />
-              )}
-
-              <HlsVideo
-                ref={idx === currentIndex ? playerRef : null}
-                src={s}
-                active={idx === currentIndex}
-                onEnded={() => idx === currentIndex && goNext()}
+              {/* ✅ Background Cover (always visible, especially while loading) */}
+              <img
+                src={video.cover}
+                alt=""
+                className="absolute inset-0 h-full w-full object-cover scale-[1.06]"
+                draggable={false}
               />
+              <div className="absolute inset-0 bg-black/55" />
+              <div className="absolute inset-0 backdrop-blur-[18px]" />
 
-              {/* LOADING */}
-              {idx === currentIndex && (
+              {/* Player on top */}
+              <div className="absolute inset-0">
+                <HlsVideo
+                  ref={isActive ? playerRef : null}
+                  src={s}
+                  active={isActive}
+                  onEnded={() => isActive && goNext()}
+                />
+              </div>
+
+              {/* ✅ Loading Overlay only (no big title block at bottom) */}
+              {isActive && (
                 <LoadingOverlay
-                  show={showLoading}
-                  title={titleName || "PANSA"}
-                  subtitle={src ? loadPhase : "Fetching episode link…"}
+                  show={showOverlayLoading}
+                  title={titleName || video.name}
+                  subtitle={loadingText}
                 />
               )}
-
-              {/* BUFFERING */}
-              <AnimatePresence>
-                {idx === currentIndex && showBuffer && (
-                  <motion.div
-                    initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                    className="absolute inset-0 z-26 grid place-items-center pointer-events-none"
-                  >
-                    <div className="ui-panel ui-border rounded-2xl px-4 py-3 flex items-center gap-3 backdrop-blur">
-                      <div className="pansa-spin-sm" />
-                      <div className="text-sm font-semibold">Buffering…</div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
 
               {/* Center play/pause */}
-              {idx === currentIndex && <CenterIndicator show={!!centerIcon} mode={centerIcon} />}
+              {isActive && <CenterIndicator show={!!centerIcon} mode={centerIcon} />}
 
-              {/* HUD (auto hide) */}
+              {/* HUD minimal (auto-hide) */}
               <AnimatePresence>
-                {idx === currentIndex && hudVisible && (
+                {isActive && hudVisible && (
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     exit={{ opacity: 0 }}
                     transition={{ duration: 0.18 }}
-                    className="absolute inset-0 z-40"
+                    className="absolute inset-0 z-60"
                   >
                     {/* top bar */}
                     <div className="absolute top-3 left-3 right-3 flex items-center justify-between">
@@ -440,24 +430,15 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
                       >
                         <i className={`${liked ? "ri-heart-3-fill text-red-400" : "ri-heart-3-line"} text-xl`} />
                       </button>
-
                       <button className="ui-btn rounded-full w-12 h-12 grid place-items-center">
                         <i className="ri-share-forward-line text-xl" />
                       </button>
                     </div>
 
-                    {/* bottom info */}
-                    <div className="absolute bottom-10 left-4 right-4 pointer-events-none">
-                      <div className="text-2xl md:text-3xl font-extrabold leading-tight">
-                        {titleName || "…"}
-                      </div>
-                      <div className="ui-muted mt-1">Episode {n}</div>
-
-                      <div className="mt-3 flex items-center gap-2 flex-wrap">
-                        <span className="ui-pill">Tap: pause/play</span>
-                        <span className="ui-pill">Hold: 2×</span>
-                        <span className="ui-pill">Double tap: like</span>
-                        <span className="ui-pill">Swipe up: next</span>
+                    {/* subtle bottom hint (auto-hide) */}
+                    <div className="absolute bottom-8 left-4 right-4 pointer-events-none">
+                      <div className="ui-muted text-xs">
+                        Tap: pause/play • Hold: 2× • Double tap: like • Swipe up: next
                       </div>
                     </div>
                   </motion.div>
@@ -466,12 +447,12 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
 
               {/* hint bubble (2×) */}
               <AnimatePresence>
-                {idx === currentIndex && hint && (
+                {isActive && hint && (
                   <motion.div
                     initial={{ opacity: 0, scale: 0.9 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.9 }}
-                    className="absolute z-50 left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 ui-panel ui-border rounded-full px-4 py-2 text-sm backdrop-blur"
+                    className="absolute z-[70] left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 ui-panel ui-border rounded-full px-4 py-2 text-sm backdrop-blur"
                   >
                     {hint}
                   </motion.div>
@@ -480,7 +461,7 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
 
               {/* heart burst */}
               <AnimatePresence>
-                {idx === currentIndex && burst && (
+                {isActive && burst && (
                   <motion.div
                     key={burst.id}
                     initial={{ opacity: 0, scale: 0.6, y: 10 }}
@@ -488,7 +469,7 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
                     exit={{ opacity: 0, scale: 1.7, y: -40 }}
                     transition={{ duration: 0.5 }}
                     style={{ left: burst.x - 22, top: burst.y - 22 }}
-                    className="absolute z-50 pointer-events-none"
+                    className="absolute z-[75] pointer-events-none"
                   >
                     <i className="ri-heart-3-fill text-red-400 text-5xl drop-shadow" />
                   </motion.div>
