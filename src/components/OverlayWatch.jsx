@@ -66,10 +66,8 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
   const hideHudTimer = useRef(null)
   const [hudVisible, setHudVisible] = useState(true)
 
-  // player state
-  const [isReady, setIsReady] = useState(false)
-  const [isBuffering, setIsBuffering] = useState(false)
-  const [isPlaying, setIsPlaying] = useState(false)
+  // playback / status
+  const [status, setStatus] = useState("idle") // idle | loading | ready | buffering | playing | error
   const [centerIcon, setCenterIcon] = useState(null) // "play" | "pause"
   const [hint, setHint] = useState(null)
 
@@ -97,7 +95,8 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
   const scheduleHideHud = (ms = 2200) => {
     if (hideHudTimer.current) clearTimeout(hideHudTimer.current)
     hideHudTimer.current = setTimeout(() => {
-      if (!isPlaying) return
+      // hide only when playing
+      if (status !== "playing") return
       setHudVisible(false)
     }, ms)
   }
@@ -126,14 +125,10 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
     setQuality("auto")
     setLikedMap({})
     setBurst(null)
-
     setHudVisible(true)
-    setIsReady(false)
-    setIsBuffering(false)
-    setIsPlaying(false)
+    setStatus("idle")
     setCenterIcon(null)
     setHint(null)
-
     if (hideHudTimer.current) clearTimeout(hideHudTimer.current)
   }, [open, video])
 
@@ -195,36 +190,36 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
   const liked = !!likedMap[ep]
   const toggleLike = () => setLikedMap((m) => ({ ...m, [ep]: !m[ep] }))
 
-  // Attach listeners to current video element
+  // refresh URL jika buffering kelamaan (anti expired auth_key)
   useEffect(() => {
     if (!open) return
-    const el = getV()
-    if (!el) return
-
-    const onWaiting = () => { setIsBuffering(true); showHudTemporarily(1200) }
-    const onPlaying = () => { setIsBuffering(false); setIsPlaying(true); setIsReady(true); showHudTemporarily(1600) }
-    const onPause = () => { setIsPlaying(false); setHudVisible(true) }
-    const onCanPlay = () => { setIsReady(true); setIsBuffering(false) }
-
-    el.addEventListener("waiting", onWaiting)
-    el.addEventListener("playing", onPlaying)
-    el.addEventListener("pause", onPause)
-    el.addEventListener("canplay", onCanPlay)
-
-    return () => {
-      el.removeEventListener("waiting", onWaiting)
-      el.removeEventListener("playing", onPlaying)
-      el.removeEventListener("pause", onPause)
-      el.removeEventListener("canplay", onCanPlay)
-    }
+    if (status !== "buffering") return
+    if (!video?.code) return
+    const t = setTimeout(async () => {
+      // kalau masih buffering setelah 8s, refresh url episode aktif
+      if (status !== "buffering") return
+      const e = currentIndex + 1
+      try {
+        const r = await api.play(video.code, lang, e)
+        setVideoByEp((m) => ({ ...m, [e]: r.data.video }))
+      } catch {}
+    }, 8000)
+    return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, currentIndex, src])
+  }, [open, status, currentIndex, lang, video?.code])
+
+  // status -> hud behavior
+  useEffect(() => {
+    if (!open) return
+    if (status === "playing") scheduleHideHud(2000)
+    else setHudVisible(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, open])
 
   // episode/quality change => show loader again
   useEffect(() => {
     if (!open) return
-    setIsReady(false)
-    setIsBuffering(false)
+    setStatus(src ? "loading" : "idle")
     setHudVisible(true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, currentIndex, quality, src])
@@ -232,7 +227,7 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
   const togglePausePlay = () => {
     const el = getV()
     if (!el) return
-    showHudTemporarily(2200)
+    showHudTemporarily(2400)
 
     if (el.paused) {
       el.play().catch(() => {})
@@ -253,13 +248,17 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
   // Double tap = like
   const onTapUp = (e) => {
     if (holding.current) return
+    showHudTemporarily(2600)
+
+    // best-effort: kalau autoplay diblokir, tap pertama akan memulai
+    const vv = getV()
+    if (vv && vv.paused && status !== "playing") vv.play().catch(() => {})
 
     const now = Date.now()
     const dt = now - lastTapAt.current
     lastTapAt.current = now
 
-    showHudTemporarily(2400)
-
+    // double tap
     if (dt < 280) {
       if (singleTapTimer.current) {
         clearTimeout(singleTapTimer.current)
@@ -276,6 +275,7 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
       return
     }
 
+    // single tap (delay to ensure not double)
     singleTapTimer.current = setTimeout(() => {
       togglePausePlay()
       singleTapTimer.current = null
@@ -286,7 +286,7 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
   const onHoldStart = () => {
     if (holdTimer.current) clearTimeout(holdTimer.current)
     holding.current = false
-    showHudTemporarily(2400)
+    showHudTemporarily(2600)
 
     holdTimer.current = setTimeout(() => {
       holding.current = true
@@ -310,9 +310,8 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
 
   if (!open || !video) return null
 
-  // ✅ Minimal loading conditions
-  const showLoading = !src || !isReady || isBuffering
-  const loadingText = !src ? "Fetching…" : (isBuffering ? "Buffering…" : "Preparing…")
+  const showLoading = !src || status === "loading" || status === "buffering"
+  const loadingText = !src ? "Fetching…" : (status === "buffering" ? "Buffering…" : "Preparing…")
 
   return (
     <div className="fixed inset-0 z-[95] bg-black">
@@ -336,7 +335,7 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
               onPointerUp={isActive ? (e) => { onHoldEnd(); onTapUp(e) } : undefined}
               onPointerCancel={isActive ? onHoldEnd : undefined}
             >
-              {/* Background cover blur */}
+              {/* Background cover blur (shown while loading too) */}
               <img
                 src={video.cover}
                 alt=""
@@ -353,10 +352,14 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
                   src={s}
                   active={isActive}
                   onEnded={() => isActive && goNext()}
+                  onStatus={(st) => {
+                    // st: idle | loading | ready | buffering | playing | error
+                    setStatus(st)
+                  }}
                 />
               </div>
 
-              {/* ✅ ONLY minimal loading + status */}
+              {/* Minimal loading + status ONLY */}
               {isActive && <MinimalLoading show={showLoading} text={loadingText} />}
 
               {/* Center play/pause icon */}
@@ -389,16 +392,17 @@ export default function OverlayWatch({ open, onClose, video, lang }) {
                       </button>
                     </div>
 
-                    {/* right actions */}
-                    <div className="absolute right-3 top-[34%] flex flex-col items-center gap-4">
+                    {/* right actions (bigger + lower) */}
+                    <div className="absolute right-4 bottom-[18%] flex flex-col items-center gap-4">
                       <button
                         onClick={(ev)=>{ev.stopPropagation(); toggleLike(); showHudTemporarily(2400)}}
-                        className="ui-btn rounded-full w-12 h-12 grid place-items-center"
+                        className="ui-btn rounded-full w-14 h-14 grid place-items-center"
                       >
-                        <i className={`${liked ? "ri-heart-3-fill text-red-400" : "ri-heart-3-line"} text-xl`} />
+                        <i className={`${liked ? "ri-heart-3-fill text-red-400" : "ri-heart-3-line"} text-2xl`} />
                       </button>
-                      <button className="ui-btn rounded-full w-12 h-12 grid place-items-center">
-                        <i className="ri-share-forward-line text-xl" />
+
+                      <button className="ui-btn rounded-full w-14 h-14 grid place-items-center">
+                        <i className="ri-share-forward-line text-2xl" />
                       </button>
                     </div>
                   </motion.div>

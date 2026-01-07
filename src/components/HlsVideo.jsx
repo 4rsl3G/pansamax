@@ -26,12 +26,24 @@ async function decryptTs(arrayBuffer) {
 
 // ============================================
 // ASLI: CUSTOM HLS LOADER (JANGAN UBAH LOGIKA)
+// + FIX: responseType arraybuffer utk fragment
 // ============================================
 class DecryptLoader extends Hls.DefaultConfig.loader {
   load(context, config, callbacks) {
+    // ⭐ PENTING: pastikan frag dapat ArrayBuffer
+    if (context?.type === "fragment") {
+      context.responseType = "arraybuffer"
+    }
+
     const onSuccess = callbacks.onSuccess
     callbacks.onSuccess = async (response, stats, ctx) => {
-      if (ctx.frag) response.data = await decryptTs(response.data)
+      if (ctx.frag) {
+        try {
+          response.data = await decryptTs(response.data)
+        } catch (e) {
+          console.error("decrypt segment failed:", e)
+        }
+      }
       onSuccess(response, stats, ctx)
     }
     super.load(context, config, callbacks)
@@ -42,7 +54,7 @@ class DecryptLoader extends Hls.DefaultConfig.loader {
 // COMPONENT
 // ============================================
 const HlsVideo = forwardRef(function HlsVideo(
-  { src, active, onEnded },
+  { src, active, onEnded, onStatus }, // onStatus optional
   ref
 ) {
   const videoRef = useRef(null)
@@ -53,34 +65,73 @@ const HlsVideo = forwardRef(function HlsVideo(
     getVideo: () => videoRef.current,
   }))
 
+  const emit = (s) => {
+    try { onStatus?.(s) } catch {}
+  }
+
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
 
-    // jika src kosong (slide non-aktif), jangan attach HLS
-    if (!src) {
-      video.pause()
+    // helper: reset element (anti blank)
+    const resetVideoEl = () => {
+      try { video.pause() } catch {}
       video.removeAttribute("src")
       video.load()
+    }
+
+    // release HLS instance
+    const destroyHls = () => {
+      if (hlsRef.current) {
+        try { hlsRef.current.destroy() } catch {}
+        hlsRef.current = null
+      }
+    }
+
+    // jika slide non-aktif / src kosong: lepaskan resource
+    if (!src || !active) {
+      emit("idle")
+      destroyHls()
+      resetVideoEl()
       return
     }
 
-    // cleanup HLS lama
-    if (hlsRef.current) {
-      try { hlsRef.current.destroy() } catch {}
-      hlsRef.current = null
-    }
+    emit("loading")
 
-    // reset video element (anti blank)
-    video.pause()
-    video.removeAttribute("src")
-    video.load()
+    // Cleanup HLS lama & reset
+    destroyHls()
+    resetVideoEl()
+
+    // iOS autoplay friendliness
+    video.muted = true
+    video.playsInline = true
+
+    // video event -> status
+    const onWaiting = () => emit("buffering")
+    const onPlaying = () => emit("playing")
+    const onCanPlay = () => emit("ready")
+    const onErr = () => emit("error")
+    const onStalled = () => emit("buffering")
+
+    video.addEventListener("waiting", onWaiting)
+    video.addEventListener("playing", onPlaying)
+    video.addEventListener("canplay", onCanPlay)
+    video.addEventListener("stalled", onStalled)
+    video.addEventListener("error", onErr)
 
     // Safari native HLS
-    if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    // (Kalau stream kamu encrypted, native biasanya tetap tidak cukup.
+    // Tapi ini kita biarkan sebagai fallback aman.)
+    if (video.canPlayType("application/vnd.apple.mpegurl") && !Hls.isSupported()) {
       video.src = src
-      if (active) video.play().catch(() => {})
-      return
+      video.play().catch(() => {})
+      return () => {
+        video.removeEventListener("waiting", onWaiting)
+        video.removeEventListener("playing", onPlaying)
+        video.removeEventListener("canplay", onCanPlay)
+        video.removeEventListener("stalled", onStalled)
+        video.removeEventListener("error", onErr)
+      }
     }
 
     // HLS.js with decrypt loader
@@ -98,22 +149,27 @@ const HlsVideo = forwardRef(function HlsVideo(
       hls.attachMedia(video)
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (active) video.play().catch(() => {})
+        video.play().catch(() => {
+          // autoplay bisa diblokir, biarkan user tap play
+          emit("ready")
+        })
       })
 
       hls.on(Hls.Events.ERROR, (event, data) => {
         if (!data?.fatal) return
-        console.error("HLS fatal:", data.type, data.details)
+        console.error("HLS fatal:", data.type, data.details, data)
+
+        emit("error")
 
         switch (data.type) {
           case Hls.ErrorTypes.NETWORK_ERROR:
-            hls.startLoad()
+            try { hls.startLoad() } catch {}
             break
           case Hls.ErrorTypes.MEDIA_ERROR:
-            hls.recoverMediaError()
+            try { hls.recoverMediaError() } catch {}
             break
           default:
-            hls.destroy()
+            try { hls.destroy() } catch {}
             hlsRef.current = null
             break
         }
@@ -121,23 +177,18 @@ const HlsVideo = forwardRef(function HlsVideo(
     } else {
       // fallback
       video.src = src
-      if (active) video.play().catch(() => {})
+      video.play().catch(() => {})
     }
 
     return () => {
-      if (hlsRef.current) {
-        try { hlsRef.current.destroy() } catch {}
-        hlsRef.current = null
-      }
+      video.removeEventListener("waiting", onWaiting)
+      video.removeEventListener("playing", onPlaying)
+      video.removeEventListener("canplay", onCanPlay)
+      video.removeEventListener("stalled", onStalled)
+      video.removeEventListener("error", onErr)
+      destroyHls()
     }
-  }, [src])
-
-  useEffect(() => {
-    const v = videoRef.current
-    if (!v) return
-    if (active && src) v.play().catch(() => {})
-    else v.pause()
-  }, [active, src])
+  }, [src, active]) // ⭐ penting: active ikut
 
   return (
     <video
@@ -146,6 +197,7 @@ const HlsVideo = forwardRef(function HlsVideo(
       playsInline
       controls={false}
       preload="metadata"
+      muted
       onEnded={onEnded}
     />
   )
